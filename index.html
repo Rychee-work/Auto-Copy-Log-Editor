@@ -53,6 +53,64 @@ button:hover{background:#f0f2f5;}
   white-space:nowrap;
 }
 
+/* ===== Tabs ===== */
+.tabsbar{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  align-items:center;
+  padding:8px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:#fff;
+}
+.tabs{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  align-items:center;
+  flex:1;
+  min-width:240px;
+}
+.tab{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:7px 10px;
+  border-radius:999px;
+  border:1px solid rgba(0,0,0,.12);
+  background:#fff;
+  cursor:pointer;
+  font-size:13px;
+  max-width:320px;
+}
+.tab:hover{background:#f0f2f5;}
+.tab.active{
+  border-color: rgba(0,0,0,.25);
+  background:#eef2ff;
+}
+.tab .name{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  max-width:240px;
+}
+.tab .x{
+  border:none;
+  background:transparent;
+  cursor:pointer;
+  font-size:14px;
+  line-height:1;
+  opacity:.7;
+  padding:0 2px;
+}
+.tab .x:hover{opacity:1;}
+.tab-actions{
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
+
 /* Find / Replace */
 .findbar{
   display:flex;
@@ -152,6 +210,15 @@ button:hover{background:#f0f2f5;}
   <span id="status" class="status">Ready</span>
 </div>
 
+<!-- Tabs UI -->
+<div class="tabsbar">
+  <div id="tabs" class="tabs" aria-label="Tabs"></div>
+  <div class="tab-actions">
+    <button id="newTab" class="mini">+ New</button>
+    <button id="renameTab" class="mini">Rename</button>
+  </div>
+</div>
+
 <div class="findbar">
   <div class="field"><label>Find</label><input id="findQ" type="text" placeholder="text or regex"></div>
   <div class="field"><label>Replace</label><input id="replQ" type="text" placeholder="replacement"></div>
@@ -172,14 +239,14 @@ button:hover{background:#f0f2f5;}
   </div>
 </div>
 
-<!-- ★ Help optimized for Download/Share -->
 <div class="help">
 <strong>How it works</strong><br>
 • Select text and release — it’s copied automatically (no <span class="kbd">Ctrl</span>+<span class="kbd">C</span>).<br>
 • Sticky auto-scroll follows live logs until you scroll up (then it pauses).<br>
+• Use multiple tabs to keep separate logs (each tab preserves its own content and scroll position).<br>
 • Line numbers help you reference specific lines when debugging or sharing.<br>
 • Use Find / Replace to clean logs fast. Enable <strong>Regex</strong> for advanced matching.<br>
-• Export logs with <strong>Download</strong> (file) or <strong>Share to app</strong> (Mail/Slack/Notes, etc.).<br>
+• Export the current tab with <strong>Download</strong> (file) or <strong>Share to app</strong> (Mail/Slack/Notes, etc.).<br>
 • Logs are never uploaded — everything runs locally in your browser.<br><br>
 <strong>Privacy-first.</strong> No accounts. No tracking. 100% local.
 </div>
@@ -188,6 +255,9 @@ button:hover{background:#f0f2f5;}
 </div>
 
 <script>
+/* =========================
+   DOM
+   ========================= */
 const editor   = document.getElementById('editor');
 const gutter   = document.getElementById('gutter');
 const pane     = document.getElementById('pane');
@@ -201,6 +271,10 @@ const downloadBtn = document.getElementById('downloadLog');
 const shareBtn    = document.getElementById('shareLog');
 const pasteBtn    = document.getElementById('pasteSample');
 const clearBtn    = document.getElementById('clear');
+
+const tabsEl      = document.getElementById('tabs');
+const newTabBtn   = document.getElementById('newTab');
+const renameTabBtn= document.getElementById('renameTab');
 
 const findQ     = document.getElementById('findQ');
 const replQ     = document.getElementById('replQ');
@@ -217,6 +291,169 @@ function setStatus(t){ statusEl.textContent = t; }
 function getText(){ return editor.innerText.replace(/\r\n/g,"\n"); }
 
 /* =========================
+   Tabs state (per-tab data)
+   ========================= */
+let tabs = [];
+let activeTabId = null;
+
+function makeId(){
+  return Math.random().toString(16).slice(2) + Date.now().toString(16);
+}
+function defaultTabName(n){ return `Tab ${n}`; }
+
+function getActiveTab(){
+  return tabs.find(t => t.id === activeTabId) || null;
+}
+
+/* capture current UI -> active tab model */
+function saveActiveTabState(){
+  const t = getActiveTab();
+  if(!t) return;
+  t.text = getText();
+  t.scrollTop = pane.scrollTop;
+  t.followTail = followTail;
+
+  t.findQ = findQ.value;
+  t.replQ = replQ.value;
+  t.useRegex = useRegex.checked;
+  t.matchCase = matchCase.checked;
+  t.wholeWord = wholeWord.checked;
+}
+
+/* apply tab model -> UI */
+function loadTabState(t){
+  editor.textContent = t.text || '';
+  pane.scrollTop = t.scrollTop || 0;
+  followTail = (typeof t.followTail === 'boolean') ? t.followTail : true;
+
+  findQ.value = t.findQ || '';
+  replQ.value = t.replQ || '';
+  useRegex.checked = !!t.useRegex;
+  matchCase.checked = !!t.matchCase;
+  wholeWord.checked = !!t.wholeWord;
+
+  updateGutter();
+  recomputeMatches();
+}
+
+/* render tabs bar */
+function renderTabs(){
+  tabsEl.innerHTML = '';
+  tabs.forEach((t) => {
+    const btn = document.createElement('div');
+    btn.className = 'tab' + (t.id === activeTabId ? ' active' : '');
+    btn.setAttribute('role','button');
+    btn.setAttribute('tabindex','0');
+    btn.title = t.name;
+
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.textContent = t.name;
+
+    const x = document.createElement('button');
+    x.className = 'x';
+    x.type = 'button';
+    x.textContent = '×';
+    x.title = 'Close tab';
+
+    x.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeTab(t.id);
+    });
+
+    btn.addEventListener('click', () => switchTab(t.id));
+    btn.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter' || e.key === ' ') switchTab(t.id);
+    });
+
+    btn.appendChild(name);
+    btn.appendChild(x);
+    tabsEl.appendChild(btn);
+  });
+}
+
+function createTab(opts={}){
+  const id = makeId();
+  const name = opts.name || defaultTabName(tabs.length + 1);
+  const tab = {
+    id, name,
+    text: opts.text || '',
+    scrollTop: 0,
+    followTail: true,
+    findQ:'', replQ:'', useRegex:false, matchCase:false, wholeWord:false
+  };
+  tabs.push(tab);
+  return tab;
+}
+
+function switchTab(id){
+  if(id === activeTabId) return;
+  saveActiveTabState();
+  activeTabId = id;
+  const t = getActiveTab();
+  if(t) loadTabState(t);
+  renderTabs();
+  setStatus(`Switched to ${t ? t.name : 'tab'}`);
+}
+
+function closeTab(id){
+  if(tabs.length <= 1){
+    setStatus('Cannot close the last tab');
+    return;
+  }
+  const idx = tabs.findIndex(t => t.id === id);
+  if(idx === -1) return;
+
+  const wasActive = (id === activeTabId);
+  tabs.splice(idx, 1);
+
+  if(wasActive){
+    const next = tabs[Math.max(0, idx - 1)] || tabs[0];
+    activeTabId = next.id;
+    loadTabState(next);
+  }
+  renderTabs();
+  setStatus('Tab closed');
+}
+
+newTabBtn.addEventListener('click', () => {
+  saveActiveTabState();
+  const t = createTab({ text: '' });
+  activeTabId = t.id;
+  loadTabState(t);
+  renderTabs();
+  setStatus('New tab created');
+  editor.focus();
+});
+
+renameTabBtn.addEventListener('click', () => {
+  const t = getActiveTab();
+  if(!t) return;
+  const next = prompt('Tab name', t.name);
+  if(next === null) return;
+  const name = next.trim();
+  if(!name){ setStatus('Name not changed'); return; }
+  t.name = name;
+  renderTabs();
+  setStatus('Tab renamed');
+});
+
+/* Keyboard shortcuts for tabs (optional but nice)
+   Ctrl+Alt+N: new tab
+   Ctrl+Alt+W: close tab
+*/
+window.addEventListener('keydown', (e) => {
+  if(e.ctrlKey && e.altKey && (e.key === 'n' || e.key === 'N')){
+    e.preventDefault();
+    newTabBtn.click();
+  }
+  if(e.ctrlKey && e.altKey && (e.key === 'w' || e.key === 'W')){
+    e.preventDefault();
+    closeTab(activeTabId);
+  }
+});
+
+/* =========================
    Sticky auto-scroll
    ========================= */
 let followTail = true;
@@ -227,6 +464,8 @@ function isNearBottom(){
 pane.addEventListener('scroll', () => {
   if(!autoScroll.checked) return;
   followTail = isNearBottom();
+  const t = getActiveTab();
+  if(t) t.scrollTop = pane.scrollTop;
 });
 function scrollToBottomIfFollowing(){
   if(!autoScroll.checked) return;
@@ -243,16 +482,22 @@ autoScroll.addEventListener('change', () => {
 });
 
 /* =========================
-   Download / Share (A/B)
+   Download / Share (current tab)
    ========================= */
 function downloadLog(){
-  const text = getText();
+  const t = getActiveTab();
+  if(!t) return;
+  saveActiveTabState();
+
+  const text = t.text || '';
   if(!text){ setStatus('Nothing to download'); return; }
+
+  const safeName = (t.name || 'log').replace(/[\\/:*?"<>|]+/g, '_');
   const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href = url;
-  a.download = 'log.txt';
+  a.download = safeName + '.txt';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -260,11 +505,16 @@ function downloadLog(){
   setStatus('Log downloaded');
 }
 async function shareLog(){
-  const text = getText();
+  const t = getActiveTab();
+  if(!t) return;
+  saveActiveTabState();
+
+  const text = t.text || '';
   if(!text){ setStatus('Nothing to share'); return; }
+
   if(navigator.share){
     try{
-      await navigator.share({title:'Log', text});
+      await navigator.share({title: t.name || 'Log', text});
       setStatus('Shared via app');
     }catch{
       setStatus('Share canceled');
@@ -299,7 +549,7 @@ document.addEventListener('selectionchange', () => {
 });
 
 /* =========================
-   Line numbers (always visible when checked)
+   Line numbers
    ========================= */
 function updateGutter(){
   if(!showLines.checked){
@@ -320,14 +570,8 @@ function updateGutter(){
 }
 showLines.addEventListener('change', updateGutter);
 
-/* keep line numbers updated while typing/pasting */
-editor.addEventListener('input', () => {
-  updateGutter();
-  scrollToBottomIfFollowing();
-});
-
 /* =========================
-   Find / Replace (supports regex)
+   Find / Replace (supports regex) per-tab
    ========================= */
 let matches = [];
 let activeIndex = -1;
@@ -364,12 +608,11 @@ function recomputeMatches(){
   let m;
   while((m = re.exec(text)) !== null){
     matches.push({start:m.index, end:m.index + m[0].length});
-    if(m[0].length === 0) re.lastIndex++; // avoid infinite loop
+    if(m[0].length === 0) re.lastIndex++;
   }
   findStatus.textContent = matches.length ? `${matches.length} match(es)` : 'No matches';
 }
 function setSelectionByOffsets(start, end){
-  // map plain-text offsets -> selection range inside contenteditable
   const sel = window.getSelection();
   if(!sel) return;
 
@@ -398,10 +641,8 @@ function setSelectionByOffsets(start, end){
   sel.removeAllRanges();
   sel.addRange(range);
 
-  // ensure visible
   const rect = range.getBoundingClientRect();
   if(rect && rect.height){
-    // small nudge for visibility inside pane
     pane.scrollTop += (rect.top < 80 ? -120 : (rect.bottom > window.innerHeight - 120 ? 120 : 0));
   }
 }
@@ -429,10 +670,9 @@ function replaceCurrent(){
   const rep = replQ.value ?? '';
 
   editor.textContent = before + rep + after;
-
   updateGutter();
   recomputeMatches();
-  // keep cursor near replaced region
+
   const newPos = it.start + rep.length;
   setSelectionByOffsets(newPos, newPos);
   setStatus('Replaced');
@@ -451,10 +691,21 @@ function replaceAllMatches(){
   setStatus('Replaced all');
 }
 
-findQ.addEventListener('input', recomputeMatches);
-useRegex.addEventListener('change', recomputeMatches);
-matchCase.addEventListener('change', recomputeMatches);
-wholeWord.addEventListener('change', recomputeMatches);
+function persistFindStateToTab(){
+  const t = getActiveTab();
+  if(!t) return;
+  t.findQ = findQ.value;
+  t.replQ = replQ.value;
+  t.useRegex = useRegex.checked;
+  t.matchCase = matchCase.checked;
+  t.wholeWord = wholeWord.checked;
+}
+
+findQ.addEventListener('input', () => { recomputeMatches(); persistFindStateToTab(); });
+replQ.addEventListener('input', () => { persistFindStateToTab(); });
+useRegex.addEventListener('change', () => { recomputeMatches(); persistFindStateToTab(); });
+matchCase.addEventListener('change', () => { recomputeMatches(); persistFindStateToTab(); });
+wholeWord.addEventListener('change', () => { recomputeMatches(); persistFindStateToTab(); });
 
 findNext.addEventListener('click', () => gotoMatch(+1));
 findPrev.addEventListener('click', () => gotoMatch(-1));
@@ -469,34 +720,69 @@ findQ.addEventListener('keydown', (e) => {
 });
 
 /* =========================
-   Buttons + Initial content
+   Editor input -> save tab text
+   ========================= */
+editor.addEventListener('input', () => {
+  const t = getActiveTab();
+  if(t) t.text = getText();
+  updateGutter();
+  scrollToBottomIfFollowing();
+});
+
+/* =========================
+   Buttons
    ========================= */
 pasteBtn.addEventListener('click', () => {
+  const t = getActiveTab();
+  if(!t) return;
+
   editor.textContent =
 `[00:00:01.123] UART0 RX: Hello
 [00:00:02.220] DHCP: OFFER 192.168.1.10 from 00:1A:2B:3C:4D:5E
 [00:00:03.100] Request ID: 550e8400-e29b-41d4-a716-446655440000
 [00:00:03.400] Connected to 10.0.0.5 port: 443`;
+
   followTail = true;
+  t.followTail = true;
+  t.text = getText();
   updateGutter();
   recomputeMatches();
   pane.scrollTop = pane.scrollHeight;
+  t.scrollTop = pane.scrollTop;
   setStatus('Sample pasted');
 });
+
 clearBtn.addEventListener('click', () => {
+  const t = getActiveTab();
+  if(!t) return;
+
   editor.textContent = '';
+  followTail = true;
+  t.followTail = true;
+  t.text = '';
   updateGutter();
   recomputeMatches();
+  pane.scrollTop = 0;
+  t.scrollTop = 0;
   setStatus('Cleared');
 });
 
-editor.textContent =
+/* =========================
+   Init
+   ========================= */
+(function init(){
+  const first = createTab({
+    name: 'Tab 1',
+    text:
 `Paste your logs here.
 Select text and release — it auto-copies.
-Use Download or Share to export logs.`;
-
-updateGutter();      // ensure line numbers visible
-recomputeMatches();  // initialize find status
+Use Download or Share to export logs.
+Use + New to open multiple tabs.`
+  });
+  activeTabId = first.id;
+  renderTabs();
+  loadTabState(first);
+})();
 </script>
 </body>
 </html>
