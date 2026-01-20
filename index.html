@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Auto Copy Log Editor</title>
+<meta name="description" content="Privacy-first terminal-style log editor. Auto-copy on selection, sticky auto-scroll, line numbers, regex find/replace. Download or share logs via your own apps. 100% local." />
+
+<style>
+:root{
+  --bg:#0b0f14;
+  --fg:#d7e0ea;
+  --border:rgba(0,0,0,.15);
+}
+body{
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  margin:16px;
+  background:#f7f8fa;
+  color:#111;
+}
+.wrap{
+  max-width:1200px;
+  margin:auto;
+  display:grid;
+  gap:10px;
+}
+h1{margin:0 0 4px 0;}
+.top{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  align-items:center;
+}
+.toggle{
+  display:flex;
+  gap:6px;
+  align-items:center;
+  font-size:14px;
+  white-space:nowrap;
+}
+button{
+  padding:8px 12px;
+  border-radius:10px;
+  border:1px solid var(--border);
+  background:#fff;
+  cursor:pointer;
+  white-space:nowrap;
+}
+button:hover{background:#f0f2f5;}
+.status{
+  font-size:13px;
+  opacity:.8;
+  white-space:nowrap;
+}
+
+/* Find / Replace */
+.findbar{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  align-items:center;
+  padding:10px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:#fff;
+}
+.field{
+  display:flex;
+  gap:6px;
+  align-items:center;
+}
+.field label{font-size:13px; opacity:.8;}
+.field input{
+  width:220px;
+  padding:7px 9px;
+  border-radius:8px;
+  border:1px solid var(--border);
+}
+.mini{padding:7px 10px; font-size:13px;}
+
+/* Editor */
+.pane{
+  border-radius:12px;
+  border:1px solid var(--border);
+  background:var(--bg);
+  color:var(--fg);
+  height:65vh;
+  min-height:520px;
+  max-height:780px;
+  overflow:auto; /* single scroll container */
+}
+.editor-wrap{
+  display:grid;
+  grid-template-columns:auto 1fr;
+  width:max-content;
+  min-width:100%;
+}
+.gutter{
+  display:none; /* controlled by JS */
+  user-select:none;
+  padding:14px 10px 14px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size:14px;
+  line-height:1.55;
+  color:rgba(255,255,255,.35);
+  border-right:1px solid rgba(255,255,255,.08);
+  background:rgba(255,255,255,.03);
+  white-space:pre;
+  text-align:right;
+  position:sticky;
+  left:0;
+  z-index:2;
+  min-width:4ch;
+}
+.editor{
+  padding:14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size:14px;
+  line-height:1.55;
+  outline:none;
+  white-space:pre; /* terminal style */
+  min-width:100%;
+}
+
+/* Help */
+.help{font-size:13px; opacity:.9; line-height:1.7;}
+.foot{font-size:12px; opacity:.7;}
+.kbd{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding:1px 6px;
+  border:1px solid rgba(0,0,0,.12);
+  border-radius:6px;
+  background:#fff;
+}
+</style>
+</head>
+
+<body>
+<div class="wrap">
+<h1>Auto Copy Log Editor</h1>
+
+<div class="top">
+  <label class="toggle"><input id="autoCopy" type="checkbox" checked> Auto-copy on selection</label>
+  <label class="toggle"><input id="autoScroll" type="checkbox" checked> Sticky auto-scroll</label>
+  <label class="toggle"><input id="showLines" type="checkbox" checked> Line numbers</label>
+
+  <button id="pasteSample">Paste sample</button>
+  <button id="clear">Clear</button>
+  <button id="downloadLog">Download log</button>
+  <button id="shareLog">Share to app</button>
+
+  <span id="status" class="status">Ready</span>
+</div>
+
+<div class="findbar">
+  <div class="field"><label>Find</label><input id="findQ" type="text" placeholder="text or regex"></div>
+  <div class="field"><label>Replace</label><input id="replQ" type="text" placeholder="replacement"></div>
+  <label class="toggle"><input id="useRegex" type="checkbox"> Regex</label>
+  <label class="toggle"><input id="matchCase" type="checkbox"> Match case</label>
+  <label class="toggle"><input id="wholeWord" type="checkbox"> Whole word</label>
+  <button class="mini" id="findPrev">Prev</button>
+  <button class="mini" id="findNext">Next</button>
+  <button class="mini" id="replaceOne">Replace</button>
+  <button class="mini" id="replaceAll">Replace all</button>
+  <span id="findStatus" class="status">—</span>
+</div>
+
+<div id="pane" class="pane">
+  <div class="editor-wrap">
+    <pre id="gutter" class="gutter" aria-hidden="true"></pre>
+    <div id="editor" class="editor" contenteditable="true" spellcheck="false" aria-label="Log editor"></div>
+  </div>
+</div>
+
+<!-- ★ Help optimized for Download/Share -->
+<div class="help">
+<strong>How it works</strong><br>
+• Select text and release — it’s copied automatically (no <span class="kbd">Ctrl</span>+<span class="kbd">C</span>).<br>
+• Sticky auto-scroll follows live logs until you scroll up (then it pauses).<br>
+• Line numbers help you reference specific lines when debugging or sharing.<br>
+• Use Find / Replace to clean logs fast. Enable <strong>Regex</strong> for advanced matching.<br>
+• Export logs with <strong>Download</strong> (file) or <strong>Share to app</strong> (Mail/Slack/Notes, etc.).<br>
+• Logs are never uploaded — everything runs locally in your browser.<br><br>
+<strong>Privacy-first.</strong> No accounts. No tracking. 100% local.
+</div>
+
+<div class="foot">Tip: If clipboard is blocked, click inside the editor once and try again.</div>
+</div>
+
+<script>
+const editor   = document.getElementById('editor');
+const gutter   = document.getElementById('gutter');
+const pane     = document.getElementById('pane');
+const statusEl = document.getElementById('status');
+
+const autoCopy   = document.getElementById('autoCopy');
+const autoScroll = document.getElementById('autoScroll');
+const showLines  = document.getElementById('showLines');
+
+const downloadBtn = document.getElementById('downloadLog');
+const shareBtn    = document.getElementById('shareLog');
+const pasteBtn    = document.getElementById('pasteSample');
+const clearBtn    = document.getElementById('clear');
+
+const findQ     = document.getElementById('findQ');
+const replQ     = document.getElementById('replQ');
+const useRegex  = document.getElementById('useRegex');
+const matchCase = document.getElementById('matchCase');
+const wholeWord = document.getElementById('wholeWord');
+const findPrev  = document.getElementById('findPrev');
+const findNext  = document.getElementById('findNext');
+const replaceOne= document.getElementById('replaceOne');
+const replaceAll= document.getElementById('replaceAll');
+const findStatus= document.getElementById('findStatus');
+
+function setStatus(t){ statusEl.textContent = t; }
+function getText(){ return editor.innerText.replace(/\r\n/g,"\n"); }
+
+/* =========================
+   Sticky auto-scroll
+   ========================= */
+let followTail = true;
+function isNearBottom(){
+  const threshold = 24;
+  return (pane.scrollTop + pane.clientHeight) >= (pane.scrollHeight - threshold);
+}
+pane.addEventListener('scroll', () => {
+  if(!autoScroll.checked) return;
+  followTail = isNearBottom();
+});
+function scrollToBottomIfFollowing(){
+  if(!autoScroll.checked) return;
+  if(followTail) pane.scrollTop = pane.scrollHeight;
+}
+autoScroll.addEventListener('change', () => {
+  if(autoScroll.checked){
+    followTail = true;
+    pane.scrollTop = pane.scrollHeight;
+    setStatus('Auto-scroll enabled');
+  }else{
+    setStatus('Auto-scroll disabled');
+  }
+});
+
+/* =========================
+   Download / Share (A/B)
+   ========================= */
+function downloadLog(){
+  const text = getText();
+  if(!text){ setStatus('Nothing to download'); return; }
+  const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = 'log.txt';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  setStatus('Log downloaded');
+}
+async function shareLog(){
+  const text = getText();
+  if(!text){ setStatus('Nothing to share'); return; }
+  if(navigator.share){
+    try{
+      await navigator.share({title:'Log', text});
+      setStatus('Shared via app');
+    }catch{
+      setStatus('Share canceled');
+    }
+  }else{
+    downloadLog(); // fallback
+  }
+}
+downloadBtn.addEventListener('click', downloadLog);
+shareBtn.addEventListener('click', shareLog);
+
+/* =========================
+   Auto-copy on selection end
+   ========================= */
+let selTimer = null;
+document.addEventListener('selectionchange', () => {
+  if(!autoCopy.checked) return;
+
+  clearTimeout(selTimer);
+  selTimer = setTimeout(async () => {
+    const sel = window.getSelection();
+    const text = sel ? sel.toString() : '';
+    if(!text) return;
+
+    try{
+      await navigator.clipboard.writeText(text);
+      setStatus(`Copied (${text.length} chars)`);
+    }catch{
+      setStatus('Clipboard blocked — click inside the editor once, then select again');
+    }
+  }, 280);
+});
+
+/* =========================
+   Line numbers (always visible when checked)
+   ========================= */
+function updateGutter(){
+  if(!showLines.checked){
+    gutter.style.display = 'none';
+    return;
+  }
+  gutter.style.display = 'block';
+
+  const lines = getText().split('\n').length;
+  const digits = String(lines).length;
+  gutter.style.minWidth = (digits + 2) + 'ch';
+
+  let out = '';
+  for(let i=1;i<=lines;i++){
+    out += String(i).padStart(digits,' ') + '\n';
+  }
+  gutter.textContent = out;
+}
+showLines.addEventListener('change', updateGutter);
+
+/* keep line numbers updated while typing/pasting */
+editor.addEventListener('input', () => {
+  updateGutter();
+  scrollToBottomIfFollowing();
+});
+
+/* =========================
+   Find / Replace (supports regex)
+   ========================= */
+let matches = [];
+let activeIndex = -1;
+
+function escapeRegExp(s){
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function buildFindRegex(){
+  const q = findQ.value ?? '';
+  if(!q) return null;
+
+  let src = q;
+  if(!useRegex.checked) src = escapeRegExp(src);
+  if(wholeWord.checked) src = `\\b(?:${src})\\b`;
+
+  const flags = matchCase.checked ? 'g' : 'gi';
+  try{
+    return new RegExp(src, flags);
+  }catch{
+    return null;
+  }
+}
+function recomputeMatches(){
+  const re = buildFindRegex();
+  const text = getText();
+  matches = [];
+  activeIndex = -1;
+
+  if(!re){
+    findStatus.textContent = findQ.value ? 'Invalid pattern' : '—';
+    return;
+  }
+
+  let m;
+  while((m = re.exec(text)) !== null){
+    matches.push({start:m.index, end:m.index + m[0].length});
+    if(m[0].length === 0) re.lastIndex++; // avoid infinite loop
+  }
+  findStatus.textContent = matches.length ? `${matches.length} match(es)` : 'No matches';
+}
+function setSelectionByOffsets(start, end){
+  // map plain-text offsets -> selection range inside contenteditable
+  const sel = window.getSelection();
+  if(!sel) return;
+
+  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null);
+  let node, count = 0;
+  let startNode=null, startOff=0, endNode=null, endOff=0;
+
+  while((node = walker.nextNode())){
+    const len = node.nodeValue.length;
+    if(!startNode && count + len >= start){
+      startNode = node;
+      startOff = start - count;
+    }
+    if(count + len >= end){
+      endNode = node;
+      endOff = end - count;
+      break;
+    }
+    count += len;
+  }
+  if(!startNode || !endNode) return;
+
+  const range = document.createRange();
+  range.setStart(startNode, Math.max(0, startOff));
+  range.setEnd(endNode, Math.max(0, endOff));
+  sel.removeAllRanges();
+  sel.addRange(range);
+
+  // ensure visible
+  const rect = range.getBoundingClientRect();
+  if(rect && rect.height){
+    // small nudge for visibility inside pane
+    pane.scrollTop += (rect.top < 80 ? -120 : (rect.bottom > window.innerHeight - 120 ? 120 : 0));
+  }
+}
+function gotoMatch(dir){
+  if(!matches.length){ recomputeMatches(); }
+  if(!matches.length) return;
+
+  if(activeIndex === -1) activeIndex = (dir > 0) ? 0 : matches.length - 1;
+  else activeIndex = (activeIndex + dir + matches.length) % matches.length;
+
+  const it = matches[activeIndex];
+  setSelectionByOffsets(it.start, it.end);
+  setStatus(`Match ${activeIndex + 1} / ${matches.length}`);
+}
+function replaceCurrent(){
+  if(!matches.length){ recomputeMatches(); }
+  if(!matches.length) return;
+
+  if(activeIndex === -1) activeIndex = 0;
+  const it = matches[activeIndex];
+
+  const text = getText();
+  const before = text.slice(0, it.start);
+  const after  = text.slice(it.end);
+  const rep = replQ.value ?? '';
+
+  editor.textContent = before + rep + after;
+
+  updateGutter();
+  recomputeMatches();
+  // keep cursor near replaced region
+  const newPos = it.start + rep.length;
+  setSelectionByOffsets(newPos, newPos);
+  setStatus('Replaced');
+}
+function replaceAllMatches(){
+  const re = buildFindRegex();
+  if(!re){ setStatus('Invalid pattern'); return; }
+
+  const text = getText();
+  const rep = replQ.value ?? '';
+  const next = text.replace(re, rep);
+
+  editor.textContent = next;
+  updateGutter();
+  recomputeMatches();
+  setStatus('Replaced all');
+}
+
+findQ.addEventListener('input', recomputeMatches);
+useRegex.addEventListener('change', recomputeMatches);
+matchCase.addEventListener('change', recomputeMatches);
+wholeWord.addEventListener('change', recomputeMatches);
+
+findNext.addEventListener('click', () => gotoMatch(+1));
+findPrev.addEventListener('click', () => gotoMatch(-1));
+replaceOne.addEventListener('click', replaceCurrent);
+replaceAll.addEventListener('click', replaceAllMatches);
+
+findQ.addEventListener('keydown', (e) => {
+  if(e.key === 'Enter'){
+    e.preventDefault();
+    gotoMatch(e.shiftKey ? -1 : +1);
+  }
+});
+
+/* =========================
+   Buttons + Initial content
+   ========================= */
+pasteBtn.addEventListener('click', () => {
+  editor.textContent =
+`[00:00:01.123] UART0 RX: Hello
+[00:00:02.220] DHCP: OFFER 192.168.1.10 from 00:1A:2B:3C:4D:5E
+[00:00:03.100] Request ID: 550e8400-e29b-41d4-a716-446655440000
+[00:00:03.400] Connected to 10.0.0.5 port: 443`;
+  followTail = true;
+  updateGutter();
+  recomputeMatches();
+  pane.scrollTop = pane.scrollHeight;
+  setStatus('Sample pasted');
+});
+clearBtn.addEventListener('click', () => {
+  editor.textContent = '';
+  updateGutter();
+  recomputeMatches();
+  setStatus('Cleared');
+});
+
+editor.textContent =
+`Paste your logs here.
+Select text and release — it auto-copies.
+Use Download or Share to export logs.`;
+
+updateGutter();      // ensure line numbers visible
+recomputeMatches();  // initialize find status
+</script>
+</body>
+</html>
